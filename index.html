@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>macOS Disk Cleaner UI</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <h1>Disk Cleaner</h1>
+      <span class="sub">Safe viewer for large files and caches</span>
+    </div>
+    <div class="actions">
+      <label class="file-input">
+        <input id="reportFile" type="file" accept="application/json" />
+        <span>Load Scan Report (JSON)</span>
+      </label>
+
+      <button id="scanServerBtn" class="primary">Scan (Server)</button>
+
+      <label class="chips" title="No changes will be made when checked">
+        <input type="checkbox" id="dryRunCheck" checked />
+        Dry Run
+      </label>
+
+      <button id="applyServerBtn" class="primary" disabled>Apply Selected (Server)</button>
+
+      <button id="exportPlanBtn" class="primary" disabled>Export Cleanup Plan</button>
+      <button id="copyCmdBtn" class="ghost" disabled>Copy Apply Command</button>
+    </div>
+  </header>
+
+  <section class="notice">
+    <p>
+      This UI does not delete files. It only previews storage usage and exports a cleanup plan.
+      Apply the plan with the shell script using Trash by default.
+    </p>
+  </section>
+
+  <section class="howto">
+    <details open>
+      <summary>How to use</summary>
+      <ol>
+        <li>
+          Run a scan to produce a report JSON:
+          <pre class="code">
+./disk_cleaner.sh --scan-output /tmp/disk_cleaner_report.json --min-size 50M --older-than 30 --downloads
+          </pre>
+        </li>
+        <li>Click “Load Scan Report” and choose the JSON.</li>
+        <li>Filter and select items, then click “Export Cleanup Plan”.</li>
+        <li>Apply the plan (dry-run first):
+          <pre class="code">
+./disk_cleaner.sh --apply-from /tmp/disk_cleaner_plan.json --dry-run
+./disk_cleaner.sh --apply-from /tmp/disk_cleaner_plan.json --apply --trash --yes
+          </pre>
+        </li>
+      </ol>
+    </details>
+  </section>
+
+  <section class="controls">
+    <div class="control-row">
+      <div class="control-group">
+        <label for="search">Search</label>
+        <input id="search" type="search" placeholder="Path, reason…" />
+      </div>
+
+      <div class="control-group">
+        <label for="minSizeUi">Min Size</label>
+        <select id="minSizeUi">
+          <option value="0">Any</option>
+          <option value="10485760">>= 10 MB</option>
+          <option value="52428800" selected>>= 50 MB</option>
+          <option value="104857600">>= 100 MB</option>
+          <option value="1073741824">>= 1 GB</option>
+          <option value="5368709120">>= 5 GB</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label for="olderThanUi">Older Than (days)</label>
+        <input id="olderThanUi" type="number" min="0" step="1" value="30" />
+      </div>
+
+      <div class="control-group">
+        <label for="categoryFilter">Categories</label>
+        <div id="categoryFilter" class="chips">
+          <label><input type="checkbox" value="user-caches" checked /> user-caches</label>
+          <label><input type="checkbox" value="browsers" checked /> browsers</label>
+          <label><input type="checkbox" value="dev" checked /> dev</label>
+          <label><input type="checkbox" value="pkg" checked /> pkg</label>
+          <label><input type="checkbox" value="downloads" /> downloads</label>
+          <label><input type="checkbox" value="deep" /> deep</label>
+          <label><input type="checkbox" value="docker" /> docker</label>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <label>Apply Mode</label>
+        <div class="chips">
+          <label><input type="radio" name="applyMode" value="trash" checked /> Move to Trash</label>
+          <label><input type="radio" name="applyMode" value="delete" /> Permanently Delete</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <div class="control-group">
+        <label for="topN">Top N Largest</label>
+        <div class="chips">
+          <input id="topN" type="number" min="0" step="1" value="0" />
+          <span class="hint">0 = show all</span>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <button id="selectAllBtn" class="ghost" disabled>Select All (visible)</button>
+        <button id="clearSelBtn" class="ghost" disabled>Clear Selection</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="summary">
+    <div class="stat">
+      <div class="label">Report Total</div>
+      <div class="value"><span id="totalCount">0</span> items</div>
+      <div class="muted" id="totalSize">0 B</div>
+    </div>
+    <div class="stat">
+      <div class="label">Visible</div>
+      <div class="value"><span id="visibleCount">0</span> items</div>
+      <div class="muted" id="visibleSize">0 B</div>
+    </div>
+    <div class="stat">
+      <div class="label">Selected</div>
+      <div class="value"><span id="selectedCount">0</span> items</div>
+      <div class="muted" id="selectedSize">0 B</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="meta">
+      <span id="homePath" class="badge">home: -</span>
+      <span id="generatedAt" class="badge">generated: -</span>
+      <span id="backendStatus" class="badge">backend: offline</span>
+    </div>
+  </section>
+
+  <section class="table-wrap">
+    <table id="itemsTable">
+      <thead>
+        <tr>
+          <th class="w-select"><input id="toggleAll" type="checkbox" disabled /></th>
+          <th data-sort="path">Path</th>
+          <th data-sort="bytes" class="w-size">Size</th>
+          <th data-sort="mtime" class="w-time">Modified</th>
+          <th data-sort="category" class="w-cat">Category</th>
+          <th class="w-reason">Reason</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody">
+        <!-- rows injected by script -->
+      </tbody>
+    </table>
+  </section>
+
+  <footer class="footer">
+    <p>
+      Safety defaults: HOME-scoped, deny-listed sensitive locations, Trash by default.
+      Review selections carefully before exporting a plan.
+    </p>
+  </footer>
+
+  <script src="./script.js"></script>
+</body>
+</html>
