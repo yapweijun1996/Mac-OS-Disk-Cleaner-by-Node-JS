@@ -774,6 +774,120 @@
       }
     } catch {}
   }
+// Compute totals by category for currently visible items (state.sorted)
+function computeVisibleCategoryTotals() {
+  try {
+    const totals = new Map();
+    for (const it of (state.sorted || [])) {
+      const cat = String(it.category || '-');
+      const b = Number(it.bytes) || 0;
+      if (!totals.has(cat)) totals.set(cat, 0);
+      totals.set(cat, totals.get(cat) + b);
+    }
+    // Sort categories by bytes desc for stable chart order
+    const entries = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+    const labels = entries.map(e => e[0]);
+    const data = entries.map(e => e[1]);
+    return { labels, data };
+  } catch {
+    return { labels: [], data: [] };
+  }
+}
+
+// Create or update the Category Distribution chart (uses Chart.js if present)
+// This reflects the currently visible (filtered + sorted + topN) items.
+function updateCategoryChart() {
+  try {
+    const canvas = document.getElementById('catChart');
+    if (!canvas) return; // chart area not present in DOM
+    // Constrain canvas to a stable size to prevent runaway growth
+    try {
+      canvas.style.maxWidth = '640px';
+      canvas.style.width = '100%';
+      canvas.style.height = '240px';
+    } catch {}
+    // Chart.js availability guard
+    if (typeof window.Chart === 'undefined') return;
+
+    const { labels, data } = computeVisibleCategoryTotals();
+
+    // No data: destroy chart if exists and clear the canvas
+    if (!labels.length || !data.length || data.every(v => v <= 0)) {
+      if (state.catChart && typeof state.catChart.destroy === 'function') {
+        state.catChart.destroy();
+      }
+      state.catChart = null;
+      const ctx = canvas.getContext('2d');
+      if (ctx) { try { ctx.clearRect(0, 0, canvas.width, canvas.height); } catch {} }
+      return;
+    }
+
+    // Build colors deterministically based on index
+    const baseColors = [
+      '#62a0ff','#7bd389','#ffcf40','#ff6b6b','#a78bfa','#f472b6','#34d399',
+      '#f59e0b','#60a5fa','#22d3ee','#fb7185','#84cc16','#eab308'
+    ];
+    const bgColors = labels.map((_, i) => baseColors[i % baseColors.length]);
+
+    // Create or update chart
+    if (!state.catChart) {
+      const ctx = canvas.getContext('2d');
+      state.catChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Bytes',
+            data,
+            backgroundColor: bgColors,
+            borderColor: '#0b1020',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          aspectRatio: 2,
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: { color: '#e6eaf2', boxWidth: 12, boxHeight: 12 }
+            },
+            title: {
+              display: true,
+              text: 'Category Distribution (visible)',
+              color: '#e6eaf2',
+              font: { weight: '600' }
+            },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const bytes = ctx.parsed || 0;
+                  // Reuse UI humanizer if present
+                  try {
+                    return `${ctx.label}: ${humanizeBytes(bytes)}`;
+                  } catch {
+                    return `${ctx.label}: ${bytes} B`;
+                  }
+                }
+              }
+            }
+          },
+          layout: { padding: 4 }
+        }
+      });
+    } else {
+      state.catChart.data.labels = labels;
+      state.catChart.data.datasets[0].data = data;
+      state.catChart.data.datasets[0].backgroundColor = bgColors;
+      state.catChart.update('none');
+      try { state.catChart.resize(); } catch {}
+    }
+  } catch (e) {
+    // Non-fatal: chart is optional
+    try { console.warn('updateCategoryChart failed', e); } catch {}
+  }
+}
 
   // Init
   wireEvents();

@@ -324,3 +324,15 @@ button:focus-visible,
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* Prevent Chart.js canvas from expanding unbounded */
+#catChart{
+  display:block;           /* remove inline baseline gap */
+  max-width:640px;         /* cap width */
+  width:100%;              /* responsive within cap */
+  height:240px;            /* fixed height to stabilize layout */
+}
+
+/* Optional: constrain the visualization container width */
+.controls[aria-label="Visualization"] .control-group{
+  max-width:800px;
+}

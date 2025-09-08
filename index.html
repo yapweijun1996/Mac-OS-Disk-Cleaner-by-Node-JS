@@ -178,6 +178,17 @@
     </div>
   </section>
 
+  <!-- Visualization: category distribution -->
+  <section class="controls" aria-label="Visualization">
+    <div class="control-row" style="align-items: flex-start;">
+      <div class="control-group" style="flex:1 1 360px; min-width:320px;">
+        <label>Category Distribution (visible items)</label>
+        <canvas id="catChart" width="400" height="220" aria-label="Category distribution chart"></canvas>
+        <span class="hint">This chart updates with filters/search. Shows sum of bytes by category.</span>
+      </div>
+    </div>
+  </section>
+
   <footer class="footer">
     <p>
       Safety defaults: HOME-scoped, deny-listed sensitive locations, Trash by default.
@@ -193,6 +204,8 @@
     </div>
   </div>
 
+  <!-- Chart.js for visualization -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Chart.js for visualization -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Chart.js for visualization -->
