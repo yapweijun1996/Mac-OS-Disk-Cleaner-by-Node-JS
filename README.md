@@ -9,6 +9,7 @@ A safe, user-friendly tool for cleaning up disk space on macOS by identifying an
 - **Categories**: Scans user-caches, browsers, dev tools, package managers, downloads, docker, deep (advanced caches).
 - **Filtering**: By size (>= 50MB default), age (>= 30 days default), categories.
 - **Apply Modes**: Move to Trash (default) or permanent delete with confirmation.
+- **Exports**: Export selected items to CSV; copy terminal apply commands to clipboard.
 - **No External Dependencies**: Uses built-in Node.js modules and Bash.
 
 ## Requirements
@@ -57,13 +58,12 @@ This generates a scan report, starts a local web server, and opens the UI in you
 
 #### Apply Cleanup Plan
 ```bash
-# Dry-run first (recommended)
+# If you saved a plain text list of paths (e.g., created by the UI "Copy Apply Command" snippet)
+./disk_cleaner.sh --apply-from /path/to/paths.txt --dry-run
+./disk_cleaner.sh --apply-from /path/to/paths.txt --apply --trash --yes
+
+# JSON plan is also supported (if you have one):
 ./disk_cleaner.sh --apply-from /path/to/plan.json --dry-run
-
-# Apply with Trash (safe)
-./disk_cleaner.sh --apply-from /path/to/plan.json --apply --trash --yes
-
-# Permanent delete (dangerous, requires confirmation)
 ./disk_cleaner.sh --apply-from /path/to/plan.json --apply --no-trash --yes
 ```
 
@@ -79,7 +79,7 @@ This generates a scan report, starts a local web server, and opens the UI in you
 
 3. The UI auto-detects the backend and can perform scans directly.
 
-4. Load a scan report JSON, filter/select items, export a cleanup plan, then apply via CLI or UI.
+4. Load a scan report JSON, filter/select items, then either Export CSV or use Copy Apply Command. Apply via CLI or UI.
 
 ### Serve Mode (Combined)
 

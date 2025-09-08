@@ -29,6 +29,7 @@
   const el = {
     reportFile: document.getElementById("reportFile"),
     exportPlanBtn: document.getElementById("exportPlanBtn"),
+    exportCsvBtn: document.getElementById("exportCsvBtn"),
     copyCmdBtn: document.getElementById("copyCmdBtn"),
     search: document.getElementById("search"),
     minSizeUi: document.getElementById("minSizeUi"),
@@ -69,6 +70,7 @@
     sortKey: "bytes",
     sortDir: "desc",
     minBytes: 0,
+    olderDays: 0,
     categoriesEnabled: new Set(["user-caches","browsers","dev","pkg"]),
     search: "",
     topN: 0,
@@ -78,6 +80,9 @@
     backendOnline: false,
     backendBase: "" // "" = same-origin; or "http://localhost:8765"
   };
+
+  // One-time guard for row click delegation
+  let rowDelegationWired = false;
 
   // Utilities
   const clampInt = (n, min, max) => Math.max(min, Math.min(max, n));
@@ -141,6 +146,8 @@
 
   function applyFilters() {
     const minBytes = state.minBytes;
+    const olderDays = Number(state.olderDays || 0);
+    const cutoff = olderDays > 0 ? (Math.floor(Date.now() / 1000) - olderDays * 86400) : null;
     const search = state.search;
     const searchParts = search.toLowerCase().split(/\s+/).filter(Boolean);
     const cats = state.categoriesEnabled;
@@ -149,10 +156,11 @@
     for (const it of state.items) {
       // Category gating
       if (!cats.has(it.category)) continue;
-      // Trashable gating in UI: We still show non-trashable but disabled selection
       // Min size
       const b = Number(it.bytes) || 0;
       if (b < minBytes) continue;
+      // Older-than gating (only include items older than N days)
+      if (cutoff && (Number(it.mtime) || 0) > cutoff) continue;
       // Search matches path or reason
       if (searchParts.length) {
         const hay = `${it.path} ${it.reason || ""}`.toLowerCase();
@@ -216,14 +224,18 @@
     for (const it of state.sorted) {
       const selected = state.selectedPaths.has(it.path);
       const isDisabled = it.trashable === false;
-      const trClass = isDisabled ? " class=\"disabled\"" : "";
+      const classes = [];
+      if (isDisabled) classes.push("disabled");
+      if (selected && !isDisabled) classes.push("selected");
+      const trClass = classes.length ? ` class="${classes.join(' ')}"` : "";
       const checkedAttr = selected && !isDisabled ? " checked" : "";
       const disableAttr = isDisabled ? " disabled" : "";
 
       visibleBytes += Number(it.bytes) || 0;
 
+      const trTitleAttr = isDisabled ? ' title="Read-only item: cannot be selected or applied (not trashable)"' : '';
       rows.push(
-        `<tr${trClass} data-path="${escapeHtmlAttr(it.path)}">
+        `<tr${trClass}${trTitleAttr} data-path="${escapeHtmlAttr(it.path)}">
           <td class="w-select"><input type="checkbox" class="row-select"${checkedAttr}${disableAttr}></td>
           <td class="path">${escapeHtml(it.path)}</td>
           <td class="bytes w-size" data-bytes="${Number(it.bytes) || 0}">${humanizeBytes(Number(it.bytes)||0)}</td>
@@ -251,6 +263,11 @@
 
     // Wire row checkbox listeners
     wireRowCheckboxEvents();
+
+    // Update sort indicators, titles, and selection button labels
+    try { refreshSortIndicators(); } catch {}
+    try { refreshSortTitles(); } catch {}
+    try { refreshSelectionButtons(); } catch {}
   }
 
   function refreshToggleAllCheckbox() {
@@ -260,27 +277,55 @@
       el.toggleAll.indeterminate = false;
       el.toggleAll.checked = false;
       el.toggleAll.disabled = true;
+      el.toggleAll.title = "No visible selectable rows";
       return;
     }
     el.toggleAll.disabled = false;
     if (selectedVisible.length === 0) {
       el.toggleAll.indeterminate = false;
       el.toggleAll.checked = false;
+      el.toggleAll.title = "Select all visible rows";
     } else if (selectedVisible.length === allVisible.length) {
       el.toggleAll.indeterminate = false;
       el.toggleAll.checked = true;
+      el.toggleAll.title = "Deselect all visible rows";
     } else {
       el.toggleAll.indeterminate = true;
       el.toggleAll.checked = false;
+      el.toggleAll.title = "Partially selected — click to select/deselect all visible";
     }
   }
 
   function setControlsEnabled(enabled) {
-    el.exportPlanBtn.disabled = !enabled || state.selectedPaths.size === 0;
-    el.copyCmdBtn.disabled = !enabled || state.selectedPaths.size === 0;
-    el.selectAllBtn.disabled = !enabled;
-    el.clearSelBtn.disabled = !enabled || state.selectedPaths.size === 0;
-    el.toggleAll.disabled = !enabled || state.sorted.length === 0;
+    const selCount = state.selectedPaths.size;
+    const needSel = selCount === 0;
+
+    if (el.exportPlanBtn) el.exportPlanBtn.disabled = !enabled || needSel;
+    if (el.exportCsvBtn) el.exportCsvBtn.disabled = !enabled || needSel;
+    if (el.copyCmdBtn) el.copyCmdBtn.disabled = !enabled || needSel;
+    if (el.selectAllBtn) el.selectAllBtn.disabled = !enabled;
+    if (el.clearSelBtn) el.clearSelBtn.disabled = !enabled || needSel;
+    if (el.toggleAll) el.toggleAll.disabled = !enabled || state.sorted.length === 0;
+
+    // Titles for clarity when disabled
+    const needDataMsg = 'Load a report or run a scan to enable';
+    const needSelMsg = 'Select at least one row to enable';
+
+    if (el.exportPlanBtn) {
+      el.exportPlanBtn.title = !enabled ? needDataMsg : (needSel ? 'Select at least one row to export a plan' : 'Export selected items as a cleanup plan (JSON)');
+    }
+    if (el.exportCsvBtn) {
+      el.exportCsvBtn.title = !enabled ? needDataMsg : (needSel ? 'Select at least one row to export CSV' : 'Export selected rows to CSV');
+    }
+    if (el.copyCmdBtn) {
+      el.copyCmdBtn.title = !enabled ? needDataMsg : (needSel ? needSelMsg : 'Copy terminal commands to apply selected paths');
+    }
+    if (el.selectAllBtn) {
+      el.selectAllBtn.title = !enabled ? needDataMsg : 'Select all visible rows';
+    }
+    if (el.clearSelBtn) {
+      el.clearSelBtn.title = !enabled ? needDataMsg : (needSel ? 'No rows selected' : `Clear all (${selCount}) selected`);
+    }
   }
 
   function updateSelectedSummary() {
@@ -297,9 +342,18 @@
     el.selectedSize.textContent = humanizeBytes(bytes);
 
     // Button enablement tied to selection
-    el.exportPlanBtn.disabled = state.items.length === 0 || count === 0;
-    el.copyCmdBtn.disabled = state.items.length === 0 || count === 0;
-    el.clearSelBtn.disabled = count === 0;
+    const noData = state.items.length === 0;
+    if (el.exportPlanBtn) el.exportPlanBtn.disabled = noData || count === 0;
+    if (el.exportCsvBtn) el.exportCsvBtn.disabled = noData || count === 0;
+    if (el.copyCmdBtn) el.copyCmdBtn.disabled = noData || count === 0;
+    if (el.clearSelBtn) el.clearSelBtn.disabled = count === 0;
+
+    // Titles reflecting current state
+    if (el.exportPlanBtn) el.exportPlanBtn.title = (noData ? 'Load a report or run a scan to enable' : (count === 0 ? 'Select at least one row to export a plan' : 'Export selected items as a cleanup plan (JSON)'));
+    if (el.exportCsvBtn) el.exportCsvBtn.title = (noData ? 'Load a report or run a scan to enable' : (count === 0 ? 'Select at least one row to export CSV' : 'Export selected rows to CSV'));
+    if (el.copyCmdBtn) el.copyCmdBtn.title = (noData ? 'Load a report or run a scan to enable' : (count === 0 ? 'Select at least one row to enable' : 'Copy terminal commands to apply selected paths'));
+
+    try { refreshSelectionButtons(); } catch {}
   }
 
   function escapeHtml(s) {
@@ -325,10 +379,12 @@
       if (!cb || cb.disabled) continue;
       const path = tr.getAttribute("data-path");
       cb.checked = true;
+      tr.classList.add("selected");
       setRowSelected(path, true);
     }
     updateSelectedSummary();
     refreshToggleAllCheckbox();
+    try { refreshSelectionButtons(); } catch {}
   }
 
   function clearSelection() {
@@ -336,9 +392,12 @@
     // Uncheck visible
     for (const cb of el.tableBody.querySelectorAll("input.row-select")) {
       cb.checked = false;
+      const tr = cb.closest("tr");
+      if (tr) tr.classList.remove("selected");
     }
     updateSelectedSummary();
     refreshToggleAllCheckbox();
+    try { refreshSelectionButtons(); } catch {}
   }
 
   // Event wiring
@@ -368,6 +427,7 @@
 
         // Reset filters to defaults, then render
         state.minBytes = Number(el.minSizeUi.value || 0) || 0;
+        state.olderDays = Number(el.olderThanUi.value || 0) || 0;
         state.search = "";
         el.search.value = "";
         const tn = Number(el.topN.value || 0);
@@ -394,6 +454,13 @@
     el.minSizeUi.addEventListener("change", () => {
       const v = Number(el.minSizeUi.value || 0);
       state.minBytes = Number.isFinite(v) ? v : 0;
+      applyFilters(); doSort(); renderTable();
+    });
+
+    // Older-than (days)
+    el.olderThanUi.addEventListener("change", () => {
+      const v = Number(el.olderThanUi.value || 0);
+      state.olderDays = Number.isFinite(v) && v >= 0 ? v : 0;
       applyFilters(); doSort(); renderTable();
     });
 
@@ -442,10 +509,12 @@
           if (!cb || cb.disabled) continue;
           const path = tr.getAttribute("data-path");
           cb.checked = false;
+          tr.classList.remove("selected");
           setRowSelected(path, false);
         }
         updateSelectedSummary();
         refreshToggleAllCheckbox();
+        try { refreshSelectionButtons(); } catch {}
       }
     });
 
@@ -465,22 +534,38 @@
       });
     }
 
-    // Export plan
-    el.exportPlanBtn.addEventListener("click", () => {
-      if (!state.report) return;
-      const plan = buildPlan();
-      const blob = new Blob([JSON.stringify(plan, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = state.lastPlanFileName;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 0);
-    });
+
+    // Export CSV (selected rows)
+    if (el.exportCsvBtn) {
+      el.exportCsvBtn.addEventListener("click", () => {
+        if (!state.report) return;
+        const lines = ['path,category,bytes,mtime'];
+        for (const it of state.items) {
+          if (state.selectedPaths.has(it.path)) {
+            const pathCsv = '"' + String(it.path).replaceAll('"','""') + '"';
+            const catCsv = '"' + String(it.category || '').replaceAll('"','""') + '"';
+            const bytes = Number(it.bytes) || 0;
+            const mtime = Number(it.mtime) || 0;
+            lines.push([pathCsv, catCsv, String(bytes), String(mtime)].join(','));
+          }
+        }
+        if (lines.length <= 1) { try { toast("No selected items"); } catch {} return; }
+        const blob = new Blob([lines.join('\n')], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        // Dynamic filename: include row count and timestamp
+        const selCount = state.selectedPaths ? state.selectedPaths.size : 0;
+        const ts = new Date().toISOString().replace(/[-:T]/g,'').slice(0,15);
+        a.download = `disk_cleaner_selection_${selCount}rows_${ts}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 0);
+      });
+    }
 
     // Copy commands to clipboard
     el.copyCmdBtn.addEventListener("click", async () => {
@@ -493,6 +578,44 @@
         window.prompt("Copy these commands:", cmd);
       }
     });
+
+    // Row click toggles selection (event delegation, one-time)
+    if (!rowDelegationWired && el.tableBody) {
+      el.tableBody.addEventListener("click", (e) => {
+        // Ignore native interactive controls
+        const ignore = e.target.closest("input,button,a,select,label,textarea");
+        if (ignore) return;
+        const tr = e.target.closest("tr");
+        if (!tr || tr.classList.contains("disabled")) return;
+        const cb = tr.querySelector("input.row-select");
+        if (!cb) return;
+        cb.checked = !cb.checked;
+        const path = tr.getAttribute("data-path");
+        setRowSelected(path, cb.checked);
+        tr.classList.toggle("selected", cb.checked);
+        updateSelectedSummary();
+        refreshToggleAllCheckbox();
+        try { refreshSelectionButtons(); } catch {}
+      });
+      rowDelegationWired = true;
+    }
+
+    // Keyboard shortcuts: Cmd/Ctrl+A select all visible, Esc clear selection
+    document.addEventListener('keydown', (e) => {
+      const inInput = e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName);
+      if (inInput) return;
+      // Select all visible
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        selectAllVisible();
+        try { toast('Selected all visible'); } catch {}
+      }
+      // Clear selection
+      if (e.key === 'Escape') {
+        clearSelection();
+        try { toast('Selection cleared'); } catch {}
+      }
+    });
   }
 
   function wireRowCheckboxEvents() {
@@ -501,8 +624,10 @@
         const tr = e.target.closest("tr");
         const path = tr.getAttribute("data-path");
         setRowSelected(path, e.target.checked);
+        if (e.target.checked) tr.classList.add("selected"); else tr.classList.remove("selected");
         updateSelectedSummary();
         refreshToggleAllCheckbox();
+        try { refreshSelectionButtons(); } catch {}
       });
     }
   }
@@ -528,35 +653,33 @@
     }
   }
 
-  function buildPlan() {
-    const items = [];
-    const selected = state.selectedPaths;
-    for (const it of state.items) {
-      if (selected.has(it.path)) {
-        items.push({ path: it.path, category: it.category });
-      }
-    }
-    return {
-      generatedAt: new Date().toISOString(),
-      home: state.report?.home || "",
-      applyMode: state.applyMode,
-      items
-    };
-  }
 
   function buildCopyApplyCommand() {
-    const placeholder = "PATH_TO_PLAN.json";
-    // Two-step: dry run first, then apply to Trash
-    const lines = [
-      "# Preview (dry-run): replace PATH_TO_PLAN.json with the saved plan path",
-      `./disk_cleaner.sh --apply-from ${placeholder} --dry-run`,
-      "",
-      "# Apply safely (moves to Trash):",
-      `./disk_cleaner.sh --apply-from ${placeholder} --apply --trash --yes`,
-      "",
-      "# Apply permanently (dangerous; not recommended):",
-      `./disk_cleaner.sh --apply-from ${placeholder} --apply --no-trash --yes`
-    ];
+    // Build a self-contained snippet that writes selected paths to a temp file and applies it.
+    const paths = [];
+    for (const it of state.items) {
+      if (state.selectedPaths.has(it.path)) paths.push(it.path);
+    }
+    if (paths.length === 0) {
+      return "# No selected items. Select rows in the UI to generate apply commands.";
+    }
+    const ts = new Date().toISOString().replace(/[-:T]/g,'').slice(0,15);
+    const tmpName = `disk_cleaner_paths_${ts}.txt`;
+    const trashFlag = state.applyMode === 'delete' ? '--no-trash' : '--trash';
+    const lines = [];
+    lines.push('# Save selected paths to a temporary file and apply via disk_cleaner.sh');
+    lines.push(`TMP="/tmp/${tmpName}"`);
+    lines.push("cat > \"$TMP\" << 'EOF_DC_PATHS'");
+    for (const p of paths) {
+      lines.push(p);
+    }
+    lines.push("EOF_DC_PATHS");
+    lines.push("");
+    lines.push("# Preview (dry-run)");
+    lines.push('./disk_cleaner.sh --apply-from "$TMP" --dry-run');
+    lines.push("");
+    lines.push(`# Apply (${trashFlag === '--trash' ? 'moves to Trash' : 'permanent delete — DANGEROUS'})`);
+    lines.push(`./disk_cleaner.sh --apply-from "$TMP" --apply ${trashFlag} --yes`);
     return lines.join("\n");
   }
 
@@ -591,6 +714,64 @@
     };
   }
 
+  // Loading overlay helpers + UI indicators
+  function overlayShow(message = "Working…") {
+    try {
+      const ov = document.getElementById("loadingOverlay");
+      if (!ov) return;
+      ov.classList.remove("hidden");
+      const m = ov.querySelector(".msg");
+      if (m) m.textContent = message;
+    } catch {}
+  }
+  function overlayHide() {
+    try {
+      const ov = document.getElementById("loadingOverlay");
+      if (!ov) return;
+      ov.classList.add("hidden");
+    } catch {}
+  }
+
+  function refreshSortIndicators() {
+    try {
+      const ths = document.querySelectorAll("thead th[data-sort]");
+      for (const th of ths) {
+        const key = th.getAttribute("data-sort");
+        if (key === state.sortKey) th.setAttribute("data-dir", state.sortDir);
+        else th.removeAttribute("data-dir");
+      }
+    } catch {}
+  }
+
+  function refreshSortTitles() {
+    try {
+      const labels = { path: 'Path', bytes: 'Size', mtime: 'Modified', category: 'Category' };
+      const ths = document.querySelectorAll("thead th[data-sort]");
+      for (const th of ths) {
+        const key = th.getAttribute('data-sort');
+        const is = key === state.sortKey;
+        const dir = is ? state.sortDir : null;
+        const label = labels[key] || key;
+        th.title = is
+          ? `Sorted by ${label} (${dir === 'asc' ? 'ascending' : 'descending'}) — click to toggle`
+          : `Sort by ${label}`;
+      }
+    } catch {}
+  }
+
+  function refreshSelectionButtons() {
+    try {
+      const vis = state.sorted ? state.sorted.length : 0;
+      const sel = state.selectedPaths ? state.selectedPaths.size : 0;
+      if (el.selectAllBtn) {
+        el.selectAllBtn.textContent = vis > 0 ? `Select All (${vis} visible)` : "Select All (visible)";
+      }
+      if (el.clearSelBtn) {
+        el.clearSelBtn.textContent = sel > 0 ? `Clear Selection (${sel})` : "Clear Selection";
+      }
+    } catch {}
+  }
+
   // Init
   wireEvents();
 
@@ -606,7 +787,12 @@
       normalizeItems,
       initCategoryChipsFromData,
       updateHeader,
-      getApplyMode
+      getApplyMode,
+      overlayShow,
+      overlayHide,
+      refreshSortIndicators,
+      refreshSortTitles,
+      refreshSelectionButtons
     };
   } catch (e) {}
 
@@ -633,6 +819,7 @@ async function autoLoadReport() {
     updateHeader(state.report);
 
     state.minBytes = Number(el.minSizeUi.value || 0) || 0;
+    state.olderDays = Number(el.olderThanUi.value || 0) || 0;
     state.search = "";
     el.search.value = "";
     const tn = Number(el.topN.value || 0);
@@ -720,17 +907,20 @@ async function autoLoadReport() {
         EL.backendStatus.textContent = 'backend: online';
         EL.backendStatus.style.background = '#1e2b46';
         EL.backendStatus.style.color = '#9fd6ff';
+        if (EL.scanServerBtn) EL.scanServerBtn.title = 'Run a scan via backend server (online)';
       } else {
         EL.backendStatus.textContent = 'backend: offline';
         EL.backendStatus.style.background = '#3a1e28';
         EL.backendStatus.style.color = '#ffc1c1';
+        if (EL.scanServerBtn) EL.scanServerBtn.title = 'Backend offline. Start: node server.js (http://localhost:8765)';
       }
     }
 
     function refreshApplyBtn() {
-      if (EL.applyServerBtn) {
-        EL.applyServerBtn.disabled = !(STATE.selectedPaths && STATE.selectedPaths.size > 0);
-      }
+      if (!EL.applyServerBtn) return;
+      const n = (STATE.selectedPaths && STATE.selectedPaths.size) || 0;
+      EL.applyServerBtn.disabled = n === 0;
+      EL.applyServerBtn.title = n > 0 ? `Apply ${n} selected item(s) via backend` : 'Select rows to enable apply';
     }
 
     async function doServerScan(auto = false) {
@@ -749,6 +939,7 @@ async function autoLoadReport() {
       if (p.include && p.include.split(',').includes('downloads')) qs.set('downloads', '1');
 
       try {
+        try { if (window.DC && window.DC.overlayShow) window.DC.overlayShow('Scanning…'); } catch {}
         const r = await fetch(`${STATE.backendBase}/api/scan?${qs.toString()}`, { method: 'GET', cache: 'no-store' });
         if (!r.ok) throw new Error(`scan http ${r.status}`);
         const data = await r.json();
@@ -770,6 +961,8 @@ async function autoLoadReport() {
       } catch (e) {
         console.warn('Scan failed', e);
         if (!auto) alert('Scan failed. Check server log. Ensure: node server.js');
+      } finally {
+        try { if (window.DC && window.DC.overlayHide) window.DC.overlayHide(); } catch {}
       }
     }
 
@@ -787,6 +980,10 @@ async function autoLoadReport() {
       if (!items.length) { alert('No items selected.'); return; }
 
       try {
+        if (mode === 'delete' && !dry) {
+          if (!window.confirm('Permanently delete selected items? This cannot be undone. Continue?')) { return; }
+        }
+        try { if (window.DC && window.DC.overlayShow) window.DC.overlayShow(dry ? 'Simulating (dry run)…' : 'Applying…'); } catch {}
         const r = await fetch(`${STATE.backendBase}/api/apply?dryRun=${dry ? '1' : '0'}&mode=${encodeURIComponent(mode)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -803,6 +1000,8 @@ async function autoLoadReport() {
       } catch (e) {
         console.warn('Apply failed', e);
         alert('Apply failed. See console for details.');
+      } finally {
+        try { if (window.DC && window.DC.overlayHide) window.DC.overlayHide(); } catch {}
       }
     }
 

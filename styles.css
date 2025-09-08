@@ -247,3 +247,80 @@ tbody td.reason{ color: var(--muted); }
   .w-time{ display:none; }
   .w-cat{ display:none; }
 }
+/* Intuitiveness improvements: selection highlight, sort indicators, loading overlay, focus outlines */
+
+/* Highlight selected rows clearly and add a left accent bar */
+tbody tr.selected{
+  background:#16223a;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+tbody tr.selected td.path{ color:#ffffff; }
+
+/* Sort direction indicators on clickable headers */
+thead th[data-sort]{
+  position: relative;
+  padding-right: 22px; /* room for arrow */
+}
+thead th[data-sort]::after{
+  display:none;
+  position:absolute;
+  right:8px;
+  top:50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: var(--muted);
+  opacity:.8;
+}
+thead th[data-sort][data-dir="asc"]::after{
+  display:inline-block;
+  content:"▲";
+  color: var(--text);
+}
+thead th[data-sort][data-dir="desc"]::after{
+  display:inline-block;
+  content:"▼";
+  color: var(--text);
+}
+
+/* Loading overlay for long-running actions (scan/apply) */
+#loadingOverlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+#loadingOverlay.hidden{ display: none !important; }
+#loadingOverlay .overlay-box{
+  display:flex; align-items:center; gap:12px;
+  background: var(--panel);
+  border:1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+#loadingOverlay .overlay-box .msg{ font-weight: 600; letter-spacing:.2px; }
+#loadingOverlay .spinner{
+  width: 28px; height: 28px;
+  border: 3px solid var(--chip-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: dc-spin 900ms linear infinite;
+}
+@keyframes dc-spin{
+  to{ transform: rotate(360deg); }
+}
+
+/* Strong visible focus for keyboard accessibility */
+button:focus-visible,
+.file-input > span:focus-visible,
+.control-group input[type="search"]:focus,
+.control-group input[type="number"]:focus,
+.control-group select:focus{
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

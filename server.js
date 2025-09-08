@@ -29,6 +29,12 @@ const url = require('url');
 const PORT = Number(process.env.PORT || 8765);
 const HOME = os.homedir();
 
+// Static root + scan cache (security/perf)
+const STATIC_ROOT = process.cwd();
+const STATIC_ROOT_RESOLVED = path.resolve(STATIC_ROOT);
+const SCAN_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const scanCache = new Map();
+
 // Safe defaults (match --easy)
 const DEFAULT_MIN_BYTES = 50 * 1024 * 1024; // 50 MB
 const DEFAULT_OLDER_DAYS = 30;
@@ -117,19 +123,32 @@ async function serveStatic(req, res) {
   const parsed = url.parse(req.url);
   let pathname = decodeURIComponent(parsed.pathname || '/');
   if (pathname === '/') pathname = '/index.html';
-  // Prevent path traversal
-  const fp = path.join(process.cwd(), pathname);
-  const rel = path.relative(process.cwd(), fp);
-  if (rel.startsWith('..')) {
+
+  // Resolve within static root and block traversal/symlinks
+  const fp = path.join(STATIC_ROOT, pathname);
+  const resolved = path.resolve(fp);
+
+  // Hard scope: must stay under STATIC_ROOT
+  if (!resolved.startsWith(STATIC_ROOT_RESOLVED + path.sep)) {
     return sendText(res, 403, 'Forbidden');
   }
+
   try {
-    const st = await fsp.stat(fp);
+    // Disallow serving symlinks to avoid sneaking outside
+    const lst = await fsp.lstat(resolved);
+    if (lst.isSymbolicLink()) {
+      return sendText(res, 403, 'Forbidden');
+    }
+
+    const st = await fsp.stat(resolved);
     if (st.isDirectory()) {
       return sendText(res, 403, 'Forbidden');
     }
-    const data = await fsp.readFile(fp);
-    res.writeHead(200, { 'Content-Type': contentTypeFor(fp) });
+    const data = await fsp.readFile(resolved);
+    res.writeHead(200, {
+      'Content-Type': contentTypeFor(resolved),
+      'Cache-Control': 'no-store'
+    });
     res.end(data);
   } catch (e) {
     sendText(res, 404, 'Not found');
@@ -205,6 +224,18 @@ async function scanHandler(req, res) {
   if (Array.isArray(q.include) && q.include.length) cats = q.include;
   if (Array.isArray(q.exclude) && q.exclude.length) {
     cats = cats.filter(c => !q.exclude.includes(c));
+  }
+
+  // Simple in-memory cache (TTL) to avoid repeated heavy scans
+  const cacheKey = JSON.stringify({
+    minBytes,
+    olderDays,
+    cats: [...cats].sort(),
+    downloads: !!q.downloads
+  });
+  const cached = scanCache.get(cacheKey);
+  if (cached && (Date.now() - cached.ts) < SCAN_CACHE_TTL_MS) {
+    return sendJson(res, 200, cached.body);
   }
 
   const items = [];
@@ -321,6 +352,8 @@ async function scanHandler(req, res) {
     items
   };
 
+  // Store in cache and respond
+  scanCache.set(cacheKey, { ts: Date.now(), body });
   sendJson(res, 200, body);
 }
 
@@ -408,11 +441,16 @@ async function applyHandler(req, res) {
     }
   }
 
-  sendJson(res, 200, {
+  const responseBody = {
     ok: true,
     summary: { count, bytes: totalBytes, human: humanize(totalBytes), dryRun, mode },
     details
-  });
+  };
+
+  // Invalidate scan cache after apply to avoid stale results
+  try { scanCache.clear(); } catch {}
+
+  sendJson(res, 200, responseBody);
 }
 
 // Router

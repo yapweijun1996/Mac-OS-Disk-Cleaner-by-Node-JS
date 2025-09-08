@@ -175,11 +175,20 @@ add_item_json() {
   local category="$2"
   local reason="$3"
   local trashable="$4"
+
+  # Normalize path for safety/audit if realpath is available
+  local realp
+  if command -v realpath >/dev/null 2>&1; then
+    realp="$(realpath "$path" 2>/dev/null || printf "%s" "$path")"
+  else
+    realp="$path"
+  fi
+
   local bytes mtime
-  bytes="$(stat_bytes "$path")"
-  mtime="$(stat_mtime_epoch "$path")"
+  bytes="$(stat_bytes "$realp")"
+  mtime="$(stat_mtime_epoch "$realp")"
   local escpath escreason
-  escpath="$(printf "%s" "$path" | json_escape)"
+  escpath="$(printf "%s" "$realp" | json_escape)"
   escreason="$(printf "%s" "$reason" | json_escape)"
   printf '{\"path\":\"%s\",\"bytes\":%s,\"mtime\":%s,\"category\":\"%s\",\"reason\":\"%s\",\"trashable\":%s}\n' "$escpath" "$bytes" "$mtime" "$category" "$escreason" "$trashable" >> "$ITEMS_FILE"
 }
@@ -367,6 +376,11 @@ apply_plan() {
   fi
   local total=0 count=0
   while IFS= read -r p; do
+    # Normalize path early (do not fail if realpath unavailable or path missing)
+    if command -v realpath >/dev/null 2>&1; then
+      p="$(realpath "$p" 2>/dev/null || printf "%s" "$p")"
+    fi
+
     [ -e "$p" ] || { log WARN "Missing: $p"; continue; }
     if ! ensure_home_scope "$p"; then
       log WARN "Outside HOME, skipping: $p"
@@ -376,14 +390,33 @@ apply_plan() {
       log WARN "Deny-listed, skipping: $p"
       continue
     fi
+
     sz="$(stat_bytes "$p")"
     if [ "$DRY_RUN" -eq 1 ]; then
       log INFO "[DRY] Would remove: $p ($(humanize "$sz"))"
     else
+      # Optional audit hash (files up to 1GiB to avoid excessive overhead)
+      before_hash=""
+      if [ -f "$p" ] && [ "$sz" -le 1073741824 ]; then
+        before_hash="$(shasum -a 256 "$p" 2>/dev/null | awk '{print $1}')"
+      fi
+      local_hash_suffix=""
+      if [ -n "$before_hash" ]; then
+        local_hash_suffix=" hash:${before_hash}"
+      fi
+
       if [ "$USE_TRASH" -eq 1 ]; then
-        safe_trash "$p" && log INFO "Trashed: $p ($(humanize "$sz"))" || log ERROR "Failed to trash: $p"
+        if safe_trash "$p"; then
+          log INFO "Trashed: $p ($(humanize "$sz"))${local_hash_suffix}"
+        else
+          log ERROR "Failed to trash: $p"
+        fi
       else
-        rm -rf "$p" && log INFO "Deleted: $p ($(humanize "$sz"))" || log ERROR "Failed to delete: $p"
+        if rm -rf "$p"; then
+          log INFO "Deleted: $p ($(humanize "$sz"))${local_hash_suffix}"
+        else
+          log ERROR "Failed to delete: $p"
+        fi
       fi
     fi
     total=$((total + sz))
