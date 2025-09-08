@@ -40,7 +40,7 @@ const DEFAULT_MIN_BYTES = 50 * 1024 * 1024; // 50 MB
 const DEFAULT_OLDER_DAYS = 30;
 
 // Categories
-const CATEGORIES = ['user-caches', 'browsers', 'dev', 'pkg', 'downloads', 'docker', 'deep'];
+const CATEGORIES = ['user-caches', 'browsers', 'dev', 'pkg', 'downloads', 'docker', 'deep', 'full'];
 
 // Deny-list: Photos, Mail, iCloud Documents, Desktop, Documents
 function isDenyListed(p) {
@@ -167,12 +167,13 @@ async function listDirs(dir) {
 
 // Recursively walk a directory collecting files matching filters
 async function walkCollect(baseDir, opts, pushItem, reason, category) {
-  // opts: { minBytes, olderDays }
+  // opts: { minBytes, olderDays, maxDepth? }
   // Avoid massive full-home scans: only scan known dirs passed to this function
-  const stack = [baseDir];
+  const maxDepth = Number(opts.maxDepth) || Infinity;
+  const stack = [{ dir: baseDir, depth: 0 }];
 
   while (stack.length) {
-    const current = stack.pop();
+    const { dir: current, depth } = stack.pop();
     let ents;
     try {
       ents = await fsp.readdir(current, { withFileTypes: true });
@@ -188,7 +189,9 @@ async function walkCollect(baseDir, opts, pushItem, reason, category) {
         if (st.isSymbolicLink()) continue; // skip symlinks to avoid cycles
         if (st.isDirectory()) {
           // Avoid descending into massive dirs under Desktop/Documents etc due to deny-list above
-          stack.push(full);
+          if (depth < maxDepth) {
+            stack.push({ dir: full, depth: depth + 1 });
+          }
         } else if (st.isFile()) {
           const bytes = Number(st.size) || 0;
           if (opts.minBytes && bytes < opts.minBytes) continue;
@@ -291,9 +294,30 @@ async function scanHandler(req, res) {
       ];
       for (const d of pdirs) if (fs.existsSync(d)) await walkCollect(d, options, pushItem, 'Package manager cache', 'pkg');
     }
+    if (cats.includes('docker')) {
+      const dockerData = path.join(HOME, 'Library', 'Containers', 'com.docker.docker', 'Data');
+      const dockerCandidates = [
+        path.join(dockerData, 'vms'),
+        path.join(dockerData, 'vm'),
+        path.join(dockerData, 'docker-daemon'),
+        path.join(dockerData, 'containers'),
+        path.join(dockerData, 'com.docker.driver.amd64-linux'),
+      ];
+      for (const d of dockerCandidates) {
+        if (fs.existsSync(d)) {
+          await walkCollect(d, options, pushItem, 'Docker data', 'docker');
+        }
+      }
+    }
     if (cats.includes('downloads')) {
       const d = path.join(HOME, 'Downloads');
       if (fs.existsSync(d)) await walkCollect(d, options, pushItem, 'Downloads item', 'downloads');
+    }
+
+    // Full scan: safe HOME-wide scan with deny-list and conservative depth
+    if (cats.includes('full')) {
+      const fullOpts = { ...options, maxDepth: 6 };
+      await walkCollect(HOME, fullOpts, pushItem, 'Full HOME scan (safe scope)', 'full');
     }
 
     // Deep scan: curated additional heavy areas under ~/Library (safe scope)
